@@ -16,6 +16,7 @@ struct PanelView: View {
     @State private var query = ""
     @AppStorage("showApps") private var showApps = false
     @State private var confirmStopAll = false
+    @State private var contentHeight: CGFloat = 0
     @FocusState private var searchFocused: Bool
     @Environment(\.isSnapshot) private var isSnapshot
     @Environment(\.openSettings) private var openSettings
@@ -43,11 +44,17 @@ struct PanelView: View {
             if isSnapshot {
                 content
             } else {
-                ViewThatFits(in: .vertical) {
-                    content
-                    ScrollView { content }.scrollIndicators(.never)
+                // A ScrollView has no ideal height, so the menu bar window would collapse
+                // around it; size it to the measured content instead, up to a cap.
+                ScrollView {
+                    content.background(GeometryReader { geo in
+                        Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
+                    })
                 }
-                .frame(maxHeight: 470)
+                .scrollIndicators(.never)
+                .scrollDisabled(contentHeight <= 470)
+                .frame(height: min(contentHeight, 470))
+                .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
             }
             footer.entrance(4)
         }
@@ -253,6 +260,11 @@ struct PanelView: View {
                 .keyboardShortcut("q")
         }
     }
+}
+
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 // MARK: - Sections and rows

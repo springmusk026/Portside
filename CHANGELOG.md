@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2 (2026-10-30)
+
+- Fix: the panel could open too short to show its list, cutting off everything below the search field.
+
 ## 1.0.1 (2026-10-30)
 
 - Fix: right after you stopped a server, looking up its port could say "taken by a process Portside can't see".
