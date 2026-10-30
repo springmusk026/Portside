@@ -92,6 +92,7 @@ Portside says the port is taken and gives you the `sudo lsof` command to find ou
 ## Also from me
 
 - [Sweepside](https://github.com/springmusk026/Sweepside): find the gigabytes your old projects are sitting on (`node_modules`, `.venv`, `target`, DerivedData…) and get them back in one click.
+- [Peekside](https://github.com/springmusk026/Peekside): see which apps used your microphone and camera today, and which ones can read what you type.
 
 ## Contributing
 
