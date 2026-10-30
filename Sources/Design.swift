@@ -70,11 +70,19 @@ enum Motion {
 
 private struct SnapshotKey: EnvironmentKey { static let defaultValue = false }
 
+private struct FlatGlowKey: EnvironmentKey { static let defaultValue = false }
+
 extension EnvironmentValues {
     /// Rendering to an image: show final states, no entrance animations.
     var isSnapshot: Bool {
         get { self[SnapshotKey.self] }
         set { self[SnapshotKey.self] = newValue }
+    }
+
+    /// Card glows as an even tint: gradients band in GIFs' 256 colors.
+    var flatGlow: Bool {
+        get { self[FlatGlowKey.self] }
+        set { self[FlatGlowKey.self] = newValue }
     }
 }
 
@@ -166,6 +174,7 @@ struct Card<Content: View>: View {
     var spacing: CGFloat = Space.s
     @ViewBuilder var content: Content
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.flatGlow) private var flatGlow
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
@@ -175,7 +184,9 @@ struct Card<Content: View>: View {
             .background {
                 ZStack {
                     shape.fill(Color.surface)
-                    if let glow {
+                    if let glow, flatGlow {
+                        shape.fill(glow.opacity(scheme == .dark ? 0.08 : 0.05))
+                    } else if let glow {
                         shape.fill(RadialGradient(colors: [glow.opacity(scheme == .dark ? 0.20 : 0.11), .clear],
                                                   center: glowAt, startRadius: 0, endRadius: 200))
                     }

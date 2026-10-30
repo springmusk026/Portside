@@ -15,6 +15,10 @@ struct PortsideApp: App {
             PanelSnapshot.write(to: URL(fileURLWithPath: args[i + 1]))
             exit(0)
         }
+        if let i = args.firstIndex(of: "--demo-gif"), i + 1 < args.count {
+            DemoReel.write(to: URL(fileURLWithPath: args[i + 1]))
+            exit(0)
+        }
         if CLI.wants(args) { exit(CLI.run(args)) }
     }
 

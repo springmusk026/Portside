@@ -33,7 +33,11 @@ state in light and dark with demo data and look at them before opening a PR:
 build/Portside.app/Contents/MacOS/Portside --snapshot /tmp/portside-shots
 ```
 
-Include before/after screenshots for visual changes.
+Include before/after screenshots for visual changes. The README animation is rendered the same way:
+
+```sh
+build/Portside.app/Contents/MacOS/Portside --demo-gif docs/demo.gif
+```
 
 ## Scope
 

@@ -98,7 +98,7 @@ final class PortStore: ObservableObject {
     func lookup(_ port: UInt16) -> PortLookup {
         let held = servers.filter { $0.portNumbers.contains(port) }
         if !held.isEmpty { return .held(held) }
-        if demo { return port < 1024 ? .hidden : .free }
+        if demo { return port == 631 ? .hidden : .free }   // CUPS, owned by root
         return Scanner.portInUse(port) ? .hidden : .free
     }
 

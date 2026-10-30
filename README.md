@@ -10,8 +10,7 @@ Portside lives in your menu bar and shows what's listening on your ports, by nam
 not *node 41233*.
 
 <p align="center">
-  <img src="docs/screenshots/panel-dark.png" width="320" alt="Portside panel: dev servers, services and containers, grouped and named by project">
-  <img src="docs/screenshots/lookup-held-dark.png" width="320" alt="Port lookup: port 3000 is taken by web (Next.js), with a button to free it">
+  <img src="docs/demo.gif" width="470" alt="Typing 3000 in Portside shows port 3000 is taken by web (Next.js); Free port 3000 stops it and the port is free again">
 </p>
 
 ## Features
@@ -27,8 +26,9 @@ not *node 41233*.
 - **Native and light**: SwiftUI with no dependencies. It reads sockets straight from the kernel (a full scan takes about a millisecond), makes no network calls and needs no admin rights.
 
 <p align="center">
-  <img src="docs/screenshots/hover-dark.png" width="320" alt="Hovering a row shows open, copy, show in Finder and stop">
-  <img src="docs/screenshots/stopping-dark.png" width="320" alt="A server that didn't stop gets a Force quit button">
+  <img src="docs/screenshots/panel-dark.png" width="270" alt="Portside panel: dev servers, services and containers, grouped and named by project">
+  <img src="docs/screenshots/hover-dark.png" width="270" alt="Hovering a row shows open, copy, show in Finder and stop">
+  <img src="docs/screenshots/stopping-dark.png" width="270" alt="A server that didn't stop gets a Force quit button">
 </p>
 
 ## Install

@@ -6,6 +6,8 @@ struct PanelPreview {
     var hovered: String? = nil
     var showApps = false
     var confirmStopAll = false
+    /// Draws a text caret after the query, for the demo animation.
+    var caret = false
 }
 
 struct PanelView: View {
@@ -112,9 +114,17 @@ struct PanelView: View {
                 .foregroundStyle(lookupPort != nil ? Color.harbor : .secondary)
                 .frame(width: 14)
             if isSnapshot {
-                Text(text.isEmpty ? "Filter, or type a port" : text)
-                    .foregroundStyle(text.isEmpty ? .tertiary : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 1) {
+                    if preview?.caret == true && text.isEmpty {
+                        Rectangle().fill(Color.harbor).frame(width: 1.5, height: 15)
+                    }
+                    Text(text.isEmpty ? "Filter, or type a port" : text)
+                        .foregroundStyle(text.isEmpty ? .tertiary : .primary)
+                    if preview?.caret == true && !text.isEmpty {
+                        Rectangle().fill(Color.harbor).frame(width: 1.5, height: 15)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 TextField("Filter, or type a port", text: $query)
                     .textFieldStyle(.plain)
