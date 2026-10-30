@@ -89,6 +89,10 @@ $ portside --all         # include apps and system processes
 **What it can't see:** processes owned by root or another user. When such a process holds a port you look up,
 Portside says the port is taken and gives you the `sudo lsof` command to find out more.
 
+## Also from me
+
+- [Sweepside](https://github.com/springmusk026/Sweepside): find the gigabytes your old projects are sitting on (`node_modules`, `.venv`, `target`, DerivedData…) and get them back in one click.
+
 ## Contributing
 
 Is your framework showing up as plain "Node.js"? Teaching Portside a new one is usually a one-line change.
