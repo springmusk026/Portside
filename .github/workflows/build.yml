@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build app
+        run: ./build.sh --no-install
+
+      - name: Find, look up and stop a server from the command line
+        run: |
+          portside=build/Portside.app/Contents/MacOS/Portside
+          mkdir -p "$RUNNER_TEMP/demo" && cd "$RUNNER_TEMP/demo" && echo '{}' > package.json
+          python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &
+          sleep 2
+          cd "$GITHUB_WORKSPACE"
+          $portside --json | tee servers.json
+          grep -q '"title" : "demo"' servers.json
+          grep -q '"detail" : "Python http.server"' servers.json
+          ! $portside 8765               # taken: exits 1
+          $portside kill 8765
+          $portside 8765                 # free again: exits 0
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Portside.app
+          path: build/Portside.app
