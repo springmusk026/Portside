@@ -22,8 +22,10 @@ jobs:
           portside=build/Portside.app/Contents/MacOS/Portside
           mkdir -p "$RUNNER_TEMP/demo" && cd "$RUNNER_TEMP/demo" && echo '{}' > package.json
           python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &
-          sleep 2
           cd "$GITHUB_WORKSPACE"
+          # Wait (up to 15 s) until the server is listening: `portside <port>` exits 1 once it's taken
+          for i in $(seq 30); do $portside 8765 >/dev/null || break; sleep 0.5; done
+          $portside --all
           $portside --json | tee servers.json
           grep -q '"title" : "demo"' servers.json
           grep -q '"detail" : "Python http.server"' servers.json
