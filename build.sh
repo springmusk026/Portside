@@ -11,12 +11,18 @@ IDENTITY=${SIGN_IDENTITY:--}
 
 # Target the minimum macOS in Info.plist, as Xcode does (swiftc otherwise
 # targets the OS it runs on, so the app wouldn't launch on older systems).
-TARGET="$(uname -m)-apple-macos$(plutil -extract LSMinimumSystemVersion raw Info.plist)"
-SWIFTC=(swiftc -O -swift-version 5 -parse-as-library -target "$TARGET")
+# ARCHS="arm64 x86_64" builds a universal app (used for releases).
+MIN_OS=$(plutil -extract LSMinimumSystemVersion raw Info.plist)
+ARCHS=(${=ARCHS:-$(uname -m)})
 
 rm -rf build
 mkdir -p "$APP/Contents/MacOS"
-"${SWIFTC[@]}" Sources/*.swift -o "$APP/Contents/MacOS/Portside"
+for arch in $ARCHS; do
+  swiftc -O -swift-version 5 -parse-as-library -target "$arch-apple-macos$MIN_OS" \
+    Sources/*.swift -o "build/Portside-$arch"
+done
+lipo -create build/Portside-* -output "$APP/Contents/MacOS/Portside"
+rm build/Portside-*
 cp Info.plist "$APP/Contents/"
 
 # App icon (rendered once from tools/make-icon.swift)

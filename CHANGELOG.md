@@ -13,3 +13,4 @@ First release.
 - Copy a network URL to open a dev server on your phone
 - Notifications when servers start or stop (optional), launch at login
 - `portside` command line: list, look up, kill, `--json`
+- Universal app (Apple silicon and Intel) attached to the release

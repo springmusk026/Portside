@@ -33,7 +33,23 @@ not *node 41233*.
 
 ## Install
 
-Requires macOS 14 Sonoma or later and the Xcode command line tools (`xcode-select --install`).
+Requires macOS 14 Sonoma or later, on Apple silicon or Intel.
+
+### Download
+
+Get `Portside.zip` from the [latest release](https://github.com/springmusk026/Portside/releases/latest),
+unzip it and move `Portside.app` to Applications.
+
+Portside isn't notarized by Apple (it's a free side project), so macOS blocks the first launch. To allow it,
+open **System Settings › Privacy & Security** and click **Open Anyway** next to the Portside message, or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Portside.app
+```
+
+### Build from source
+
+With the Xcode command line tools (`xcode-select --install`):
 
 ```sh
 git clone https://github.com/springmusk026/Portside.git
@@ -41,15 +57,14 @@ cd Portside
 ./build.sh        # builds, installs to ~/Applications and launches
 ```
 
-Portside is ad-hoc signed and not notarized, which is fine for an app you build yourself. To start it at
-login, use **Settings › Launch at login**.
+To start Portside at login, use **Settings › Launch at login**.
 
 ### Command line
 
 Link the app's binary into your PATH (Settings shows the exact command, with a Copy button):
 
 ```sh
-ln -sf ~/Applications/Portside.app/Contents/MacOS/Portside /opt/homebrew/bin/portside
+ln -sf /Applications/Portside.app/Contents/MacOS/Portside /opt/homebrew/bin/portside
 ```
 
 ```console
