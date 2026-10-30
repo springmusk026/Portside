@@ -21,11 +21,13 @@ jobs:
         run: |
           portside=build/Portside.app/Contents/MacOS/Portside
           mkdir -p "$RUNNER_TEMP/demo" && cd "$RUNNER_TEMP/demo" && echo '{}' > package.json
-          python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &
+          python3 -m http.server 8765 --bind 127.0.0.1 > "$RUNNER_TEMP/server.log" 2>&1 &
           cd "$GITHUB_WORKSPACE"
-          # Wait (up to 15 s) until the server is listening: `portside <port>` exits 1 once it's taken
-          for i in $(seq 30); do $portside 8765 >/dev/null || break; sleep 0.5; done
-          $portside --all
+          # Wait (up to 15 s) until the server answers
+          for i in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:8765/ && break; sleep 0.5; done
+          echo "--- server log"; cat "$RUNNER_TEMP/server.log"
+          echo "--- lsof"; lsof -nP -iTCP:8765 -sTCP:LISTEN || true
+          echo "--- portside --all"; $portside --all
           $portside --json | tee servers.json
           grep -q '"title" : "demo"' servers.json
           grep -q '"detail" : "Python http.server"' servers.json
