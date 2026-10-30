@@ -22,13 +22,21 @@ not *node 41233*.
 - **Open to your network**: a `LAN` badge marks servers listening on all interfaces, which other devices on your Wi-Fi can reach. For those, **Copy network URL** gives you `http://192.168.1.24:8000` to test on your phone.
 - **Forgotten servers**: anything up for more than a day is flagged.
 - **Notifications** when a server starts or stops (optional). They aren't sent for servers you stop from Portside, or for quick restarts during hot reload.
-- **Command line**: `portside`, `portside 3000`, `portside kill 3000`, `portside --json`.
+- **Group by project**: a repository's dev servers and its Docker Compose containers together, with **Stop all** for the project.
+- **Keyboard first**: ↑↓ to pick a server, ↩ to open it, ⌘O to open its folder in your editor (VS Code, Cursor, Zed, JetBrains…), ⌘⌫ to stop it. Set a global shortcut to open the panel.
+- **Hide, pin, and clean up**: hide what you never care about, pin what matters, and optionally stop dev servers you forgot about after 8 hours or a day.
+- **Command line**: `portside`, `portside 3000`, `portside kill 3000`, `portside wait 3000`, `portside --json`.
+- **Raycast**: a [Raycast extension](integrations/raycast) lists and stops servers from the launcher.
 - **Native and light**: SwiftUI with no dependencies. It reads sockets straight from the kernel (a full scan takes about a millisecond), makes no network calls and needs no admin rights.
 
 <p align="center">
   <img src="docs/screenshots/panel-dark.png" width="270" alt="Portside panel: dev servers, services and containers, grouped and named by project">
   <img src="docs/screenshots/hover-dark.png" width="270" alt="Hovering a row shows open, copy, show in Finder and stop">
   <img src="docs/screenshots/stopping-dark.png" width="270" alt="A server that didn't stop gets a Force quit button">
+</p>
+<p align="center">
+  <img src="docs/screenshots/projects-dark.png" width="270" alt="Grouped by project: a repository's dev servers and its Compose container in one section">
+  <img src="docs/screenshots/selected-dark.png" width="270" alt="A row picked with the arrow keys, with its keyboard shortcuts in the footer">
 </p>
 
 ## Install
@@ -74,7 +82,9 @@ PORT  NAME  WHAT     PID    UP      REACH    WHERE
 8000  api   Uvicorn  41301  47m     network  ~/Projects/acme/api
 
 $ portside 3000          # who holds it? exits 1 if taken, 0 if free
-$ portside kill 3000     # stop it (--force for SIGKILL)
+$ portside kill 3000     # stop it (--force for SIGKILL; several ports at once work too)
+$ portside open 3000     # open it in your browser
+$ portside wait 3000     # block until something listens (--free: until nothing does)
 $ portside --json        # for scripts, Raycast, SketchyBar
 $ portside --all         # include apps and system processes
 ```
@@ -84,7 +94,8 @@ $ portside --all         # include apps and system processes
 - **Finding listeners**: `proc_listallpids` and `proc_pidfdinfo` (libproc) list every TCP socket in `LISTEN` state and its process, the same source `lsof` uses, without spawning anything. Portside rescans every 3 seconds.
 - **Naming**: the process's command line (`KERN_PROCARGS2`) gives the framework. Its working directory, walked up to the nearest `package.json`, `pyproject.toml`, `Gemfile`, `go.mod`, `Cargo.toml` or `.git`, gives the project.
 - **Containers**: when a container runtime is listening, Portside runs `docker ps` (cached for a few seconds) and matches the published ports.
-- **Stopping**: SIGTERM to the listening process and to any runner above it in the same folder (`npm`, `pnpm`, `yarn`, `bun`, `uv`, `bundle`, `cargo`…), or `docker stop` for containers.
+- **Stopping**: SIGTERM to the listening process and to any runner above it in the same folder (`npm`, `pnpm`, `yarn`, `bun`, `uv`, `bundle`, `cargo`…), or `docker stop` for containers. A runner that also runs another server (`concurrently "vite" "uvicorn"`) is left alone unless you stop both.
+- **Projects**: the nearest folder with `.git` above a server's project groups it with the others; Compose containers join through the folder `docker compose up` ran in.
 
 **What it can't see:** processes owned by root or another user. When such a process holds a port you look up,
 Portside says the port is taken and gives you the `sudo lsof` command to find out more.

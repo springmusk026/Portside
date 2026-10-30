@@ -1,18 +1,20 @@
 // The command line. Run the app binary with arguments, or link it as `portside`:
 //   portside                 list servers
 //   portside 3000            who holds port 3000
-//   portside kill 3000       stop it (--force to SIGKILL)
+//   portside kill 3000 8000  stop them (--force to SIGKILL)
+//   portside open 3000       open it in the browser
+//   portside wait 3000       wait until something listens on it (--free: until nothing does)
 //   portside --json          machine-readable list
 //   portside --all           include apps and system processes
 
-import Foundation
+import AppKit
 
 enum CLI {
     /// Whether this launch is a command-line run rather than the menu bar app.
     static func wants(_ args: [String]) -> Bool {
         let invokedAs = (args.first.map { ($0 as NSString).lastPathComponent } ?? "")
         let flags = Array(args.dropFirst()).filter { !$0.hasPrefix("-psn") && !$0.hasPrefix("-NS") && !$0.hasPrefix("-Apple") }
-        return invokedAs == "portside" || flags.contains { ["--json", "--list", "--all", "--help", "-h", "kill", "--version"].contains($0) || UInt16($0) != nil }
+        return invokedAs == "portside" || flags.contains { ["--json", "--list", "--all", "--help", "-h", "kill", "open", "wait", "--version"].contains($0) || UInt16($0) != nil }
     }
 
     static func run(_ argv: [String]) -> Int32 {
@@ -36,29 +38,31 @@ enum CLI {
         }
 
         if let i = args.firstIndex(of: "kill") {
+            let ports = args[(i + 1)...].compactMap { UInt16($0) }
+            guard !ports.isEmpty else { printError("usage: portside kill <port>... [--force]"); return 2 }
+            return kill(ports, force: args.contains("--force"), style: style)
+        }
+
+        if let i = args.firstIndex(of: "open") {
+            guard i + 1 < args.count, let port = UInt16(args[i + 1]) else { printError("usage: portside open <port>"); return 2 }
+            guard let server = scanServers().first(where: { $0.portNumbers.contains(port) }) else {
+                printError("Nothing Portside can see is listening on :\(port)."); return 1
+            }
+            let url = server.address(host: "localhost").replacingOccurrences(of: ":\(server.primaryPort)", with: ":\(port)")
+            guard url.hasPrefix("http"), let target = URL(string: url) else {
+                printError("\(server.title) isn't a web server; its address is \(url)"); return 1
+            }
+            NSWorkspace.shared.open(target)
+            print("Opened \(url)")
+            return 0
+        }
+
+        if let i = args.firstIndex(of: "wait") {
             guard i + 1 < args.count, let port = UInt16(args[i + 1]) else {
-                printError("usage: portside kill <port> [--force]"); return 2
+                printError("usage: portside wait <port> [--free] [--timeout <seconds>]"); return 2
             }
-            let holders = scanServers().filter { $0.portNumbers.contains(port) }
-            guard !holders.isEmpty else {
-                if Scanner.portInUse(port) {
-                    printError("Port \(port) is held by a process Portside can't see (another user or root). Try: sudo lsof -i :\(port)")
-                    return 1
-                }
-                print("Port \(port) is already free."); return 0
-            }
-            var ok = true
-            for s in holders {
-                guard s.kind.stoppable || args.contains("--force") else {
-                    printError("\(s.title) is an app; quit it normally, or pass --force."); ok = false; continue
-                }
-                if Killer.stopAndWait(s, force: args.contains("--force")) {
-                    print("Stopped \(style.bold(s.title)) (\(s.detail)) on :\(port)")
-                } else {
-                    printError("\(s.title) is still running. Try: portside kill \(port) --force"); ok = false
-                }
-            }
-            return ok ? 0 : 1
+            let timeout = args.firstIndex(of: "--timeout").flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil } ?? 60
+            return wait(port, untilFree: args.contains("--free"), timeout: timeout)
         }
 
         if let port = args.compactMap({ UInt16($0) }).first {
@@ -81,6 +85,52 @@ enum CLI {
         }
         print(table(servers, style: style))
         return 0
+    }
+
+    /// Stops whatever holds each port. Servers sharing a runner (`concurrently`) are stopped together.
+    private static func kill(_ ports: [UInt16], force: Bool, style: Style) -> Int32 {
+        let all = scanServers()
+        let pids = Set(all.filter { !Set($0.portNumbers).isDisjoint(with: ports) }.compactMap(\.pid))
+        var ok = true
+        var done = Set<String>()
+        for port in ports {
+            let holders = all.filter { $0.portNumbers.contains(port) }
+            guard !holders.isEmpty else {
+                if Scanner.portInUse(port) {
+                    printError("Port \(port) is held by a process Portside can't see (another user or root). Try: sudo lsof -i :\(port)")
+                    ok = false
+                } else {
+                    print("Port \(port) is already free.")
+                }
+                continue
+            }
+            for s in holders where !done.contains(s.id) {
+                done.insert(s.id)
+                guard s.kind.stoppable || force else {
+                    printError("\(s.title) is an app; quit it normally, or pass --force."); ok = false; continue
+                }
+                if Killer.stopAndWait(s, force: force, together: pids) {
+                    print("Stopped \(style.bold(s.title)) (\(s.detail)) on :\(port)")
+                } else {
+                    printError("\(s.title) is still running. Try: portside kill \(port) --force"); ok = false
+                }
+            }
+        }
+        return ok ? 0 : 1
+    }
+
+    /// Waits for a port to be taken (or freed). 0 when it happens, 1 on timeout.
+    private static func wait(_ port: UInt16, untilFree: Bool, timeout: TimeInterval) -> Int32 {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            let taken = Scanner.portInUse(port) || scanServers().contains { $0.portNumbers.contains(port) }
+            if taken != untilFree { return 0 }
+            if Date() >= deadline {
+                printError("Timed out after \(Int(timeout)) s: port \(port) is still \(untilFree ? "taken" : "free").")
+                return 1
+            }
+            usleep(250_000)
+        }
     }
 
     static func table(_ servers: [Server], style: Style) -> String {
@@ -129,7 +179,10 @@ enum CLI {
       portside                 list dev servers, services and containers
       portside --all           include apps and system processes
       portside <port>          who holds a port (exits 1 if taken, 0 if free)
-      portside kill <port>     stop whatever holds a port (--force to SIGKILL)
+      portside kill <port>...  stop whatever holds the ports (--force to SIGKILL)
+      portside open <port>     open a web server in your browser
+      portside wait <port>     wait until something listens (--free: until nothing does;
+                               --timeout <seconds>, default 60; exits 1 on timeout)
       portside --json          the list as JSON, for scripts
 
     Run without arguments from Finder or Spotlight for the menu bar app.

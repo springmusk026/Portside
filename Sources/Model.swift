@@ -40,6 +40,8 @@ struct Server: Identifiable, Codable, Equatable {
     var status: String? = nil
     /// Where the program comes from when there's no project folder: "Homebrew", "Ollama.app".
     var source: String? = nil
+    /// The repository (or Compose folder) it belongs to, shared by a project's servers and containers.
+    var group: String? = nil
 
     var primaryPort: UInt16 { ports.first?.port ?? 0 }
     var exposed: Bool { ports.contains { $0.exposed } }
@@ -50,6 +52,12 @@ struct Server: Identifiable, Codable, Equatable {
 
     /// Stays the same across restarts, for notifications.
     var key: String { "\(kind.rawValue)|\(title)|\(primaryPort)" }
+
+    /// Stays the same across restarts and port changes, for hiding and pinning.
+    var nameKey: String { "\(kind.rawValue)|\(title)" }
+
+    /// The group's display name: its folder's name.
+    var groupName: String? { group.map { ($0 as NSString).lastPathComponent } }
 
     /// What "open" or "copy" gives: a URL for web servers, a connection string for databases.
     var url: String { address(host: "localhost") }
@@ -89,7 +97,8 @@ enum Classifier {
                     if result.contains(where: { $0.container == c.name }) { continue }
                     result.append(Server(id: "container:\(c.name)", kind: .container, title: c.name,
                                          detail: c.image, ports: mine, container: c.name,
-                                         command: "docker \(c.name)", status: c.status))
+                                         command: "docker \(c.name)", status: c.status,
+                                         group: c.composeDirectory.map { Project.root(of: $0) }))
                 }
                 if !leftover.isEmpty { result.append(server(proc, listeners: leftover)) }
             } else {
@@ -122,7 +131,7 @@ enum Classifier {
         return Server(id: "pid:\(proc.pid)", kind: kind, title: title, detail: subtitle, ports: listeners,
                       pid: proc.pid, command: proc.args.joined(separator: " "),
                       directory: project?.path ?? (kind == .app ? nil : usefulCwd),
-                      started: proc.started, memory: proc.memory, source: origin(proc.path))
+                      started: proc.started, memory: proc.memory, source: origin(proc.path), group: project?.root)
     }
 
     static func origin(_ path: String) -> String? {
@@ -208,27 +217,55 @@ enum Classifier {
 
 // MARK: - Projects
 
-struct Project {
+struct Project: Equatable {
     let name: String
     let path: String
+    /// The repository it's part of (the nearest folder with `.git`), or `path` outside one.
+    let root: String
 
     static let markers = ["package.json", "pyproject.toml", "Gemfile", "go.mod", "Cargo.toml", "composer.json",
                           "mix.exs", "deno.json", "manage.py", "requirements.txt", "pom.xml", "build.gradle",
                           "build.gradle.kts", "Package.swift", ".git"]
 
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cache: [String: (date: Date, project: Project?)] = [:]
+
     /// The nearest folder at or above `cwd` that looks like a project, stopping at the home folder.
+    /// Cached for a minute: the scan asks every 3 seconds, and projects rarely move.
     static func find(from cwd: String?) -> Project? {
         guard let cwd, cwd != "/" else { return nil }
-        let home = NSHomeDirectory()
+        lock.lock()
+        if let hit = cache[cwd], Date().timeIntervalSince(hit.date) < 60 { lock.unlock(); return hit.project }
+        lock.unlock()
+        let project = lookup(cwd)
+        lock.lock()
+        if cache.count > 500 { cache.removeAll() }
+        cache[cwd] = (Date(), project)
+        lock.unlock()
+        return project
+    }
+
+    private static func lookup(_ cwd: String) -> Project? {
         let fm = FileManager.default
         var dir = URL(fileURLWithPath: cwd)
-        while dir.path != home && dir.path != "/" {
+        while dir.path != NSHomeDirectory() && dir.path != "/" {
             if markers.contains(where: { fm.fileExists(atPath: dir.appendingPathComponent($0).path) }) {
-                return Project(name: dir.lastPathComponent, path: dir.path)
+                return Project(name: dir.lastPathComponent, path: dir.path, root: root(of: dir.path))
             }
             dir.deleteLastPathComponent()
         }
-        return cwd == home ? nil : Project(name: (cwd as NSString).lastPathComponent, path: cwd)
+        return cwd == NSHomeDirectory() ? nil : Project(name: (cwd as NSString).lastPathComponent, path: cwd, root: root(of: cwd))
+    }
+
+    /// The nearest folder at or above `path` with a `.git`, below the home folder; otherwise `path`.
+    static func root(of path: String) -> String {
+        let fm = FileManager.default
+        var dir = URL(fileURLWithPath: path)
+        while dir.path != NSHomeDirectory() && dir.path != "/" {
+            if fm.fileExists(atPath: dir.appendingPathComponent(".git").path) { return dir.path }
+            dir.deleteLastPathComponent()
+        }
+        return path
     }
 }
 

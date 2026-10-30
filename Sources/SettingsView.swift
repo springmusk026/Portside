@@ -6,6 +6,11 @@ struct SettingsView: View {
     @EnvironmentObject private var store: PortStore
     @AppStorage("countInMenuBar") private var countInMenuBar = true
     @AppStorage("notifyChanges") private var notifyChanges = false
+    @AppStorage("groupByProject") private var groupByProject = false
+    @AppStorage("autoStopHours") private var autoStopHours = 0
+    @AppStorage("shortcut") private var shortcut = Shortcut.off.rawValue
+    @AppStorage("editor") private var editor = ""
+    @AppStorage("terminal") private var terminal = ""
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var notificationsDenied = false
     @State private var copied = false
@@ -28,6 +33,55 @@ struct SettingsView: View {
                         }
                     }
                 Toggle("Show the number of running servers in the menu bar", isOn: $countInMenuBar)
+                Picker("Open the panel with", selection: $shortcut) {
+                    ForEach(Shortcut.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .onChange(of: shortcut) { _, value in Hotkey.apply(Shortcut(rawValue: value) ?? .off) }
+            }
+
+            Section {
+                Picker("Group servers by", selection: $groupByProject) {
+                    Text("Kind").tag(false)
+                    Text("Project").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Picker("Open projects in", selection: $editor) {
+                    let installed = Launcher.editors.filter(\.installed)
+                    if installed.isEmpty { Text("No editor found").tag("") }
+                    ForEach(installed) { Text($0.name).tag($0.bundleID) }
+                }
+                .disabled(Launcher.editors.allSatisfy { !$0.installed })
+                .onAppear { if editor.isEmpty, let first = Launcher.editor { editor = first.bundleID } }
+                Picker("Terminal", selection: $terminal) {
+                    ForEach(Launcher.terminals.filter(\.installed)) { Text($0.name).tag($0.bundleID) }
+                }
+                .onAppear { if terminal.isEmpty { terminal = Launcher.terminal.bundleID } }
+            }
+
+            Section {
+                Picker(selection: $autoStopHours) {
+                    Text("Never").tag(0)
+                    Text("After 8 hours").tag(8)
+                    Text("After a day").tag(24)
+                    Text("After 3 days").tag(72)
+                } label: {
+                    Text("Stop forgotten dev servers")
+                    Text("Sends SIGTERM to dev servers running longer than this. Pinned servers, services and containers are never stopped.")
+                }
+            }
+
+            if !store.hidden.isEmpty {
+                Section("Hidden") {
+                    ForEach(store.hidden.sorted(), id: \.self) { key in
+                        HStack {
+                            Text(key.split(separator: "|").last.map(String.init) ?? key)
+                            Text(key.split(separator: "|").first.map { Kind(rawValue: String($0))?.section ?? "" } ?? "")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Unhide") { store.unhide(key) }
+                        }
+                    }
+                }
             }
 
             Section {

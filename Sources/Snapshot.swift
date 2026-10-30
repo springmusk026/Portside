@@ -20,6 +20,8 @@ enum PanelSnapshot {
             ("stopping", Demo.store(stopping: ["pid:41233": .stopping(since: Date()), "pid:52011": .stuck]),
              PanelPreview(confirmStopAll: true)),
             ("empty", PortStore(servers: []), PanelPreview()),
+            ("selected", Demo.store(), PanelPreview(selected: "pid:41301")),
+            ("projects", Demo.store(pinned: ["dev|blog"]), PanelPreview(byProject: true)),
         ]
 
         for (scheme, name) in [(ColorScheme.light, "light"), (.dark, "dark")] {

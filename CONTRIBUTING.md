@@ -7,7 +7,11 @@ Thanks for helping. Portside is small on purpose: one SwiftUI app, no dependenci
 ```sh
 ./build.sh              # build, install to ~/Applications and launch
 ./build.sh --no-install # build into build/ only
+./test.sh               # run the tests (Tests/Tests.swift)
 ```
+
+The tests need no Xcode project or XCTest: they compile with the app's sources and use a small `expect`.
+Add a case when you teach Portside a new framework, and run them before a PR (CI does too).
 
 You need the Xcode command line tools (Swift 6) and macOS 14 or later.
 
@@ -38,6 +42,16 @@ Include before/after screenshots for visual changes. The README animation is ren
 ```sh
 build/Portside.app/Contents/MacOS/Portside --demo-gif docs/demo.gif
 ```
+
+## Releasing
+
+```sh
+./build.sh --release   # universal build/Portside.zip, and its SHA-256 for the Homebrew cask
+```
+
+With a Developer ID certificate, `SIGN_IDENTITY="Developer ID Application: …"` and
+`NOTARY_PROFILE=<profile>` (from `xcrun notarytool store-credentials`) also notarize and staple it.
+Then update the cask as described in [packaging/homebrew](packaging/homebrew/README.md).
 
 ## Scope
 

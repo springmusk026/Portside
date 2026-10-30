@@ -30,15 +30,24 @@ final class PortStore: ObservableObject {
     @Published private(set) var stopping: [String: StopState] = [:]
     @Published private(set) var now = Date()
     @Published private(set) var lanAddress: String?
+    /// Servers moved down with the apps, and ones kept at the top and never stopped
+    /// automatically, by `Server.nameKey`.
+    @Published private(set) var hidden: Set<String>
+    @Published private(set) var pinned: Set<String>
 
     @AppStorage("notifyChanges") var notifyChanges = false
+    /// Stop dev servers that have run longer than this; 0 is never.
+    @AppStorage("autoStopHours") var autoStopHours = 0
 
     private var loop: Task<Void, Never>?
     private var tracker = ChangeTracker()
     private var demo = false
 
     /// With `servers`, a fixed demo store for snapshots: no scanning.
-    init(servers: [Server]? = nil, stopping: [String: StopState] = [:]) {
+    init(servers: [Server]? = nil, stopping: [String: StopState] = [:], pinned: Set<String> = []) {
+        let defaults = UserDefaults.standard
+        hidden = servers == nil ? Set(defaults.stringArray(forKey: "hidden") ?? []) : []
+        self.pinned = servers == nil ? Set(defaults.stringArray(forKey: "pinned") ?? []) : pinned
         if let servers {
             self.servers = servers
             self.stopping = stopping
@@ -55,8 +64,66 @@ final class PortStore: ObservableObject {
         }
     }
 
-    var visible: [Server] { servers.filter { $0.kind != .app } }
-    var apps: [Server] { servers.filter { $0.kind == .app } }
+    /// Dev servers, services and containers, pinned ones first in each kind.
+    var visible: [Server] {
+        let shown = servers.filter { $0.kind != .app && !hidden.contains($0.nameKey) }
+        return shown.filter { pinned.contains($0.nameKey) } + shown.filter { !pinned.contains($0.nameKey) }
+    }
+
+    /// Apps, system processes and servers you've hidden.
+    var apps: [Server] { servers.filter { $0.kind == .app || hidden.contains($0.nameKey) } }
+
+    func isHidden(_ server: Server) -> Bool { hidden.contains(server.nameKey) }
+    func isPinned(_ server: Server) -> Bool { pinned.contains(server.nameKey) }
+
+    func setHidden(_ server: Server, _ on: Bool) {
+        withAnimation(Motion.spring) { if on { hidden.insert(server.nameKey) } else { hidden.remove(server.nameKey) } }
+        if !demo { UserDefaults.standard.set(hidden.sorted(), forKey: "hidden") }
+    }
+
+    func unhide(_ key: String) {
+        withAnimation(Motion.spring) { _ = hidden.remove(key) }
+        if !demo { UserDefaults.standard.set(hidden.sorted(), forKey: "hidden") }
+    }
+
+    func setPinned(_ server: Server, _ on: Bool) {
+        withAnimation(Motion.spring) { if on { pinned.insert(server.nameKey) } else { pinned.remove(server.nameKey) } }
+        if !demo { UserDefaults.standard.set(pinned.sorted(), forKey: "pinned") }
+    }
+
+    /// The other servers of the project this one belongs to, including it.
+    func project(of server: Server) -> [Server] {
+        guard let group = server.group else { return [server] }
+        return visible.filter { $0.group == group }
+    }
+
+    /// The panel's sections: by kind, or by project with the rest under "Other".
+    func sections(_ servers: [Server], byProject: Bool) -> [ServerGroup] {
+        guard byProject else {
+            return [Kind.dev, .service, .container].compactMap { kind in
+                let rows = servers.filter { $0.kind == kind }
+                return rows.isEmpty ? nil : ServerGroup(id: kind.rawValue, title: kind.section, servers: rows)
+            }
+        }
+        var order: [String] = []
+        var groups: [String: [Server]] = [:]
+        for s in servers {
+            guard let g = s.group else { continue }
+            if groups[g] == nil { order.append(g) }
+            groups[g, default: []].append(s)
+        }
+        // Projects with a dev server first, then by name
+        order.sort {
+            let a = groups[$0]!.contains { $0.kind == .dev }, b = groups[$1]!.contains { $0.kind == .dev }
+            return a != b ? a : ($0 as NSString).lastPathComponent.localizedStandardCompare(($1 as NSString).lastPathComponent) == .orderedAscending
+        }
+        var result = order.map { g in
+            ServerGroup(id: g, title: (g as NSString).lastPathComponent, servers: groups[g]!, project: g)
+        }
+        let rest = servers.filter { $0.group == nil }
+        if !rest.isEmpty { result.append(ServerGroup(id: "other", title: "Other", servers: rest)) }
+        return result
+    }
 
     func refresh() async {
         let fresh = await Task.detached(priority: .utility) { scanServers() }.value
@@ -69,21 +136,43 @@ final class PortStore: ObservableObject {
             if !ids.contains(id) { stopping[id] = nil }
             else if case .stopping(let since) = state, now.timeIntervalSince(since) > 4 { stopping[id] = .stuck }
         }
-        let events = tracker.update(fresh.filter { $0.kind != .app }, initial: !loaded)
+        let events = tracker.update(fresh.filter { $0.kind != .app && !hidden.contains($0.nameKey) }, initial: !loaded)
         if notifyChanges { events.forEach(Notifier.send) }
         if fresh != servers { withAnimation(Motion.spring) { servers = fresh } }
         loaded = true
+        autoStop()
+    }
+
+    /// Stops dev servers left running longer than the limit in Settings, except pinned ones.
+    private func autoStop() {
+        guard autoStopHours > 0, !demo else { return }
+        let limit = TimeInterval(autoStopHours) * 3600
+        for s in visible where s.kind == .dev && !isPinned(s) && stopping[s.id] == nil {
+            guard let started = s.started, now.timeIntervalSince(started) > limit else { continue }
+            stop(s)
+            if notifyChanges { Notifier.send(.autoStopped(s, after: now.timeIntervalSince(started))) }
+        }
     }
 
     // MARK: Actions
 
     func stop(_ server: Server, force: Bool = false) {
-        tracker.expectStop(server.key)
-        stopping[server.id] = .stopping(since: Date())
-        if let name = server.container {
-            Task.detached { Docker.stop(name, force: force) }
-        } else if let pid = server.pid {
-            Killer.stop(pid, force: force)
+        stop([server], force: force)
+    }
+
+    /// Stops servers together: a runner they share (`concurrently`, `turbo`) goes too,
+    /// which it wouldn't when stopping just one of them.
+    func stop(_ servers: [Server], force: Bool = false) {
+        let pids = Set(servers.compactMap(\.pid))
+        for server in servers where server.kind.stoppable || force {
+            tracker.expectStop(server.key)
+            stopping[server.id] = .stopping(since: Date())
+            if let name = server.container {
+                Task.detached { Docker.stop(name, force: force) }
+            } else if let pid = server.pid {
+                guard !demo else { continue }
+                Killer.stop(pid, force: force, together: pids)
+            }
         }
         Task {
             try? await Task.sleep(for: .milliseconds(600))
@@ -92,7 +181,7 @@ final class PortStore: ObservableObject {
     }
 
     func stopAll() {
-        visible.filter { $0.kind == .dev }.forEach { stop($0) }
+        stop(visible.filter { $0.kind == .dev })
     }
 
     func lookup(_ port: UInt16) -> PortLookup {
@@ -118,62 +207,21 @@ final class PortStore: ObservableObject {
     }
 
     func openInTerminal(_ server: Server) {
-        guard let dir = server.directory else { return }
-        let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
-        if let terminal {
-            NSWorkspace.shared.open([URL(fileURLWithPath: dir)], withApplicationAt: terminal,
-                                    configuration: NSWorkspace.OpenConfiguration())
-        }
+        if let dir = server.directory { Launcher.open(dir, with: Launcher.terminal) }
+    }
+
+    func openInEditor(_ server: Server) {
+        if let dir = server.directory, let editor = Launcher.editor { Launcher.open(dir, with: editor) }
     }
 }
 
-// MARK: - Stopping processes
-
-enum Killer {
-    /// Programs that run a dev server on someone's behalf (`npm run dev` → node → next).
-    /// Stopping only the listening child often leaves the parent to restart it.
-    static let runners: Set<String> = ["node", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "deno", "uv", "poetry",
-                                       "pipenv", "bundle", "rake", "cargo", "go", "air", "nodemon", "watchexec",
-                                       "turbo", "nx", "concurrently", "foreman", "overmind", "honcho", "mix", "gradle",
-                                       "java", "php", "dotnet"]
-
-    /// The listening process and the runners above it in the same folder, outermost first.
-    static func chain(_ pid: Int32) -> [Int32] {
-        var result = [pid]
-        let cwd = Scanner.workingDirectory(pid)
-        var current = pid
-        for _ in 0..<4 {
-            guard let info = Scanner.bsdInfo(current) else { break }
-            let parent = Int32(info.pbi_ppid)
-            guard parent > 1, let parentInfo = Scanner.bsdInfo(parent) else { break }
-            let name = withUnsafeBytes(of: parentInfo.pbi_comm) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-            let isRunner = runners.contains(name) || name.hasPrefix("python") || name.hasPrefix("ruby")
-            guard isRunner, Scanner.workingDirectory(parent) == cwd else { break }
-            result.insert(parent, at: 0)
-            current = parent
-        }
-        return result
-    }
-
-    static func stop(_ pid: Int32, force: Bool) {
-        for p in chain(pid) { kill(p, force ? SIGKILL : SIGTERM) }
-    }
-
-    /// For the command line: stops the server and waits up to `timeout` for it to exit.
-    static func stopAndWait(_ server: Server, force: Bool, timeout: TimeInterval = 4) -> Bool {
-        if let name = server.container {
-            Docker.stop(name, force: force)
-            return !scanServers().contains { $0.container == name }
-        }
-        guard let pid = server.pid else { return false }
-        stop(pid, force: force)
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if !Scanner.isAlive(pid) { return true }
-            usleep(100_000)
-        }
-        return !Scanner.isAlive(pid)
-    }
+/// A section of the panel: one kind of server, or one project.
+struct ServerGroup: Identifiable {
+    let id: String
+    let title: String
+    let servers: [Server]
+    /// The project folder, when the section is a project.
+    var project: String? = nil
 }
 
 // MARK: - Notifications
@@ -181,6 +229,7 @@ enum Killer {
 enum ChangeEvent {
     case started(Server)
     case stopped(Server)
+    case autoStopped(Server, after: TimeInterval)
 }
 
 /// Turns successive scans into start/stop events. A server must be seen in two scans
@@ -243,6 +292,9 @@ enum Notifier {
         case .stopped(let s):
             content.title = "\(s.title) stopped"
             content.body = "\(s.detail) is no longer listening on :\(s.primaryPort)"
+        case .autoStopped(let s, let after):
+            content.title = "Stopped \(s.title)"
+            content.body = "\(s.detail) on :\(s.primaryPort) had been running for \(fmtUptime(after))"
         }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)

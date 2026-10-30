@@ -38,6 +38,11 @@ enum Scanner {
         }
     }
 
+    /// Processes with at least one listening socket, without reading anything else about them.
+    static func listeningPids() -> [Int32] {
+        allPids().filter { !listeners($0).isEmpty }
+    }
+
     static func allPids() -> [Int32] {
         let count = proc_listallpids(nil, 0)
         guard count > 0 else { return [] }
@@ -147,8 +152,10 @@ enum Scanner {
         return args
     }
 
+    /// Running, as opposed to gone or exited and waiting for its parent to collect it (a zombie).
     static func isAlive(_ pid: Int32) -> Bool {
-        kill(pid, 0) == 0 || errno == EPERM
+        guard kill(pid, 0) == 0 || errno == EPERM else { return false }
+        return bsdInfo(pid).map { $0.pbi_status != UInt32(SZOMB) } ?? false   // no info: a zombie
     }
 
     /// Whether anything at all holds the port, including processes Portside can't see

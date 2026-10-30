@@ -1,0 +1,67 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "portside",
+  "title": "Portside",
+  "description": "See and stop the dev servers, databases and containers listening on your ports.",
+  "icon": "extension-icon.png",
+  "author": "springmusk026",
+  "categories": [
+    "Developer Tools"
+  ],
+  "license": "MIT",
+  "platforms": [
+    "macOS"
+  ],
+  "commands": [
+    {
+      "name": "running-servers",
+      "title": "Running Servers",
+      "subtitle": "Portside",
+      "description": "List dev servers, services and containers listening on TCP ports, then open, copy or stop them.",
+      "mode": "view",
+      "keywords": [
+        "port",
+        "ports",
+        "localhost",
+        "server",
+        "kill"
+      ]
+    }
+  ],
+  "preferences": [
+    {
+      "name": "editor",
+      "title": "Editor",
+      "description": "App used by Open in Editor. Leave empty to use the default app for folders.",
+      "type": "appPicker",
+      "required": false
+    },
+    {
+      "name": "portsidePath",
+      "title": "Portside Binary",
+      "description": "Path to the portside binary, if it isn't in a standard location.",
+      "type": "file",
+      "required": false
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^2.10.1",
+    "@raycast/utils": "^2.3.3"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.2.0",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "eslint": "^10.14.0",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.0"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "prepublishOnly": "echo \"\\n\\nIt seems like you are trying to publish the Raycast extension to npm.\\n\\nIf you did intend to publish it to npm, remove the \\`prepublishOnly\\` script and rerun \\`npm publish\\` again.\\nIf you wanted to publish it to the Raycast Store instead, use \\`npm run publish\\` instead.\\n\\n\" && exit 1",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}

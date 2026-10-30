@@ -9,6 +9,8 @@ struct DockerContainer: Equatable {
     let image: String
     let status: String
     let hostPorts: Set<UInt16>
+    /// The folder `docker compose up` ran in, for containers started by Compose.
+    var composeDirectory: String? = nil
 }
 
 enum Docker {
@@ -26,7 +28,7 @@ enum Docker {
         lock.lock()
         if let cache, Date().timeIntervalSince(cache.date) < maxAge { lock.unlock(); return cache.containers }
         lock.unlock()
-        let fresh = cli.flatMap { run($0, ["ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"]) }
+        let fresh = cli.flatMap { run($0, ["ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\t{{.Label \"com.docker.compose.project.working_dir\"}}"]) }
             .map(parse) ?? []
         lock.lock()
         cache = (Date(), fresh)
@@ -59,7 +61,8 @@ enum Docker {
                 let bounds = spec.split(separator: "-").compactMap { UInt16($0) }
                 if let lo = bounds.first { (lo...(bounds.last ?? lo)).forEach { ports.insert($0) } }
             }
-            return DockerContainer(name: f[0], image: f[1], status: f[2], hostPorts: ports)
+            let dir = f.count > 4 && f[4].hasPrefix("/") ? f[4] : nil
+            return DockerContainer(name: f[0], image: f[1], status: f[2], hostPorts: ports, composeDirectory: dir)
         }
     }
 

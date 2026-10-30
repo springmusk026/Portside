@@ -6,6 +6,8 @@ struct PanelPreview {
     var hovered: String? = nil
     var showApps = false
     var confirmStopAll = false
+    var selected: String? = nil
+    var byProject: Bool? = nil
     /// Draws a text caret after the query, for the demo animation.
     var caret = false
 }
@@ -17,12 +19,30 @@ struct PanelView: View {
     @AppStorage("showApps") private var showApps = false
     @State private var confirmStopAll = false
     @State private var contentHeight: CGFloat = 0
+    /// The row picked with the arrow keys, by server id.
+    @State private var selection: String?
+    @AppStorage("groupByProject") private var groupByProject = false
     @FocusState private var searchFocused: Bool
     @Environment(\.isSnapshot) private var isSnapshot
     @Environment(\.openSettings) private var openSettings
 
     private var text: String { (preview?.query ?? query).trimmingCharacters(in: .whitespaces) }
     private var appsShown: Bool { preview?.showApps ?? showApps }
+    private var byProject: Bool { preview?.byProject ?? groupByProject }
+    private var selected: String? { preview?.selected ?? selection }
+
+    private var groups: [ServerGroup] { store.sections(store.visible.filter(matches), byProject: byProject) }
+
+    /// Rows in the order they're shown, for the arrow keys.
+    private var navigable: [Server] {
+        if let port = lookupPort {
+            if case .held(let servers) = store.lookup(port) { return servers }
+            return []
+        }
+        return groups.flatMap(\.servers) + (appsShown ? store.apps.filter(matches) : [])
+    }
+
+    private var selectedServer: Server? { navigable.first { $0.id == selected } }
 
     /// "3000" or ":3000" in the search field means "who's on this port?"
     private var lookupPort: UInt16? {
@@ -46,10 +66,15 @@ struct PanelView: View {
             } else {
                 // A ScrollView has no ideal height, so the menu bar window would collapse
                 // around it; size it to the measured content instead, up to a cap.
-                ScrollView {
-                    content.background(GeometryReader { geo in
-                        Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
-                    })
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        content.background(GeometryReader { geo in
+                            Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
+                        })
+                    }
+                    .onChange(of: selection) { _, id in
+                        if let id { withAnimation(Motion.quick) { proxy.scrollTo(id) } }
+                    }
                 }
                 .scrollIndicators(.never)
                 .scrollDisabled(contentHeight <= 470)
@@ -137,7 +162,22 @@ struct PanelView: View {
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .onSubmit(submit)
-                    .onExitCommand { query = "" }
+                    .onExitCommand {
+                        if selection != nil { selection = nil } else { query = "" }
+                    }
+                    .onKeyPress(.downArrow) { move(1); return .handled }
+                    .onKeyPress(.upArrow) { move(-1); return .handled }
+                    .onKeyPress(keys: [.delete, "c", "o", "f"], phases: .down) { press in
+                        guard press.modifiers == .command, let server = selectedServer else { return .ignored }
+                        switch press.key {
+                        case .delete: if server.kind.stoppable { store.stop(server) }
+                        case "c":     store.copy(server.url)
+                        case "o":     store.openInEditor(server)
+                        default:      store.reveal(server)
+                        }
+                        return .handled
+                    }
+                    .onChange(of: query) { selection = nil }
             }
             if !text.isEmpty {
                 Button { query = "" } label: {
@@ -155,8 +195,19 @@ struct PanelView: View {
         .animation(Motion.quick, value: focused)
     }
 
-    /// Return opens the only match.
+    private func move(_ step: Int) {
+        let rows = navigable
+        guard !rows.isEmpty else { return }
+        let i = rows.firstIndex { $0.id == selection }.map { $0 + step } ?? (step > 0 ? 0 : rows.count - 1)
+        selection = rows[min(max(i, 0), rows.count - 1)].id
+    }
+
+    /// Return opens the selected row, or the only match.
     private func submit() {
+        if let server = selectedServer {
+            if server.isWeb { store.open(server) } else if server.kind != .app { store.copy(server.url) }
+            return
+        }
         let hits = lookupPort.map { p in store.servers.filter { $0.portNumbers.contains(p) } }
             ?? store.visible.filter(matches)
         if hits.count == 1, let s = hits.first { s.isWeb ? store.open(s) : store.copy(s.url) }
@@ -169,7 +220,7 @@ struct PanelView: View {
             if !store.loaded {
                 EmptyView()
             } else if let port = lookupPort {
-                PortLookupView(port: port, result: store.lookup(port), hovered: preview?.hovered)
+                PortLookupView(port: port, result: store.lookup(port), hovered: preview?.hovered, selected: selected)
                     .entrance(2)
             } else {
                 let shown = store.visible.filter(matches)
@@ -179,12 +230,10 @@ struct PanelView: View {
                     Text("Nothing matches “\(text)”.").font(Typo.caption).foregroundStyle(.secondary)
                         .padding(.horizontal, Space.xxs)
                 }
-                ForEach(Array([Kind.dev, .service, .container].enumerated()), id: \.element) { i, kind in
-                    let rows = shown.filter { $0.kind == kind }
-                    if !rows.isEmpty {
-                        ServerSection(title: kind.section, servers: rows, hovered: preview?.hovered)
-                            .entrance(2 + i)
-                    }
+                ForEach(Array(store.sections(shown, byProject: byProject).enumerated()), id: \.element.id) { i, group in
+                    ServerSection(title: group.title, servers: group.servers, project: group.project,
+                                  hovered: preview?.hovered, selected: selected)
+                        .entrance(2 + min(i, 2))
                 }
                 appsSection.entrance(3)
             }
@@ -227,7 +276,7 @@ struct PanelView: View {
                 }
                 .buttonStyle(PressStyle())
                 if appsShown {
-                    ServerSection(title: nil, servers: apps, hovered: preview?.hovered)
+                    ServerSection(title: nil, servers: apps, hovered: preview?.hovered, selected: selected)
                         .transition(.opacity.combined(with: .offset(y: -4)))
                 }
             }
@@ -236,11 +285,29 @@ struct PanelView: View {
 
     // MARK: Footer
 
+    private func keyHints(_ server: Server) -> some View {
+        let hints = [("↩", server.isWeb ? "open" : "copy"), ("⌘C", "copy")]
+            + (server.directory != nil && Launcher.editor != nil ? [("⌘O", "editor")] : [])
+            + (server.kind.stoppable ? [("⌘⌫", "stop")] : [])
+        return HStack(spacing: Space.s) {
+            ForEach(hints, id: \.0) { key, action in
+                HStack(spacing: 3) {
+                    Text(key).foregroundStyle(.secondary)
+                    Text(action).foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .font(Typo.caption)
+        .padding(.leading, Space.xxs)
+    }
+
     private var footer: some View {
         let devs = store.visible.filter { $0.kind == .dev && store.stopping[$0.id] == nil }
         let confirming = preview?.confirmStopAll ?? confirmStopAll
         return HStack(spacing: Space.xs) {
-            if devs.count > 1 {
+            if let server = selectedServer {
+                keyHints(server).transition(.opacity)
+            } else if devs.count > 1 {
                 FooterButton(title: confirming ? "Stop \(devs.count) dev servers?" : "Stop all dev servers",
                              icon: "stop.fill", tint: confirming ? .critical : nil) {
                     if confirming {
@@ -272,8 +339,13 @@ private struct ContentHeightKey: PreferenceKey {
 struct ServerSection: View {
     let title: String?
     let servers: [Server]
+    /// The project folder, when the section is a project: its header can stop them all.
+    var project: String? = nil
     var hovered: String? = nil
+    var selected: String? = nil
     var highlightPort: UInt16? = nil
+    @EnvironmentObject private var store: PortStore
+    @State private var headerHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
@@ -281,13 +353,30 @@ struct ServerSection: View {
                 HStack(spacing: Space.xxs) {
                     Text(title).font(Typo.heading).foregroundStyle(.secondary)
                     Text("\(servers.count)").font(Typo.mono).foregroundStyle(.tertiary)
+                    Spacer()
+                    let stoppable = servers.filter { $0.kind.stoppable && store.stopping[$0.id] == nil }
+                    if project != nil, stoppable.count > 1 {
+                        Button { store.stop(stoppable) } label: {
+                            Text("Stop all").font(Typo.micro)
+                                .foregroundStyle(headerHovered ? Color.critical : Color.secondary)
+                        }
+                        .buttonStyle(PressStyle())
+                        .opacity(headerHovered ? 1 : 0)
+                        .help("Stop \(stoppable.count) servers and containers in \(title)")
+                        .accessibilityLabel("Stop all in \(title)")
+                    }
                 }
+                .frame(height: 16)
                 .padding(.horizontal, Space.xxs)
+                .contentShape(Rectangle())
+                .onHover { h in withAnimation(Motion.quick) { headerHovered = h } }
             }
             Card(padding: 0, spacing: 0) {
                 ForEach(Array(servers.enumerated()), id: \.element.id) { i, server in
                     if i > 0 { Rectangle().fill(Color.hairline).frame(height: 0.5).padding(.leading, 31) }
-                    ServerRow(server: server, forceHover: hovered == server.id, highlightPort: highlightPort)
+                    ServerRow(server: server, forceHover: hovered == server.id, selected: selected == server.id,
+                              highlightPort: highlightPort)
+                        .id(server.id)
                 }
             }
         }
@@ -297,12 +386,14 @@ struct ServerSection: View {
 struct ServerRow: View {
     let server: Server
     var forceHover = false
+    var selected = false
     var highlightPort: UInt16? = nil
     @EnvironmentObject private var store: PortStore
     @State private var hovering = false
 
     private var state: StopState? { store.stopping[server.id] }
-    private var showActions: Bool { (hovering || forceHover) && state == nil }
+    private var highlighted: Bool { hovering || forceHover || selected }
+    private var showActions: Bool { highlighted && state == nil }
 
     var body: some View {
         HStack(alignment: .top, spacing: Space.xs) {
@@ -310,6 +401,10 @@ struct ServerRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(server.title).font(Typo.title).lineLimit(1).layoutPriority(1)
+                    if store.isPinned(server) {
+                        Image(systemName: "pin.fill").font(.system(size: 8)).foregroundStyle(.tertiary)
+                            .help("Pinned: kept at the top and never stopped automatically")
+                    }
                     Text(server.detail).font(Typo.caption).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: Space.xs)
                     ports
@@ -335,14 +430,35 @@ struct ServerRow: View {
         .padding(.leading, Space.s)
         .padding(.trailing, Space.xs)
         .padding(.vertical, 6)
-        .background((hovering || forceHover) ? Color.surface : .clear)
+        .background(highlighted ? Color.surface : .clear)
+        .overlay(alignment: .leading) {
+            if selected { Capsule().fill(Color.harbor).frame(width: 3, height: 22).padding(.leading, 3) }
+        }
         .contentShape(Rectangle())
         .onHover { h in withAnimation(Motion.quick) { hovering = h } }
         .onTapGesture(perform: primaryAction)
         .help(server.isWeb ? "Click to open \(server.url)" : server.kind == .app ? server.command : "Click to copy \(server.url)")
         .contextMenu { menu }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { primaryAction() }
+        .accessibilityAction(named: "Copy \(server.url)") { store.copy(server.url) }
+        .accessibilityAction(named: "Stop") { if server.kind.stoppable { store.stop(server) } }
         .opacity(state == nil ? 1 : 0.75)
         .animation(Motion.quick, value: state)
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [server.title, server.detail, "port " + server.portNumbers.map(String.init).joined(separator: ", ")]
+        if server.exposed { parts.append("open to your network") }
+        if let dir = server.directory { parts.append(abbreviate(dir)) }
+        switch state {
+        case .stopping: parts.append("stopping")
+        case .stuck:    parts.append("didn't stop")
+        case nil:       break
+        }
+        return parts.joined(separator: ", ")
     }
 
     private func primaryAction() {
@@ -429,7 +545,13 @@ struct ServerRow: View {
                 RowAction(icon: "iphone", help: "Copy \(url) to open it on another device", confirms: true) { store.copy(url) }
             }
             if server.directory != nil {
-                RowAction(icon: "folder", help: "Show in Finder") { store.reveal(server) }
+                if let editor = Launcher.editor {
+                    RowAction(icon: "chevron.left.forwardslash.chevron.right", help: "Open in \(editor.name)") {
+                        store.openInEditor(server)
+                    }
+                } else {
+                    RowAction(icon: "folder", help: "Show in Finder") { store.reveal(server) }
+                }
             }
             if server.kind.stoppable {
                 RowAction(icon: "stop.fill", help: server.container != nil ? "Stop container" : "Stop (SIGTERM)", destructive: true) {
@@ -446,16 +568,26 @@ struct ServerRow: View {
             Button("Copy Network URL") { store.copy(server.address(host: lan)) }
         }
         if server.directory != nil {
+            if let editor = Launcher.editor { Button("Open in \(editor.name)") { store.openInEditor(server) } }
+            Button("Open in \(Launcher.terminal.name)") { store.openInTerminal(server) }
             Button("Show in Finder") { store.reveal(server) }
-            Button("Open in Terminal") { store.openInTerminal(server) }
         }
         Divider()
         if let pid = server.pid { Button("Copy PID \(pid)") { store.copy(String(pid)) } }
         if !server.command.isEmpty { Button("Copy Command") { store.copy(server.command) } }
+        if server.kind != .app {
+            Divider()
+            Button(store.isPinned(server) ? "Unpin" : "Pin to Top") { store.setPinned(server, !store.isPinned(server)) }
+            Button(store.isHidden(server) ? "Unhide" : "Hide") { store.setHidden(server, !store.isHidden(server)) }
+        }
         if server.kind.stoppable {
             Divider()
             Button("Stop") { store.stop(server) }
             Button("Force Quit") { store.stop(server, force: true) }
+            let project = store.project(of: server).filter(\.kind.stoppable)
+            if project.count > 1, let name = server.groupName {
+                Button("Stop All in \(name) (\(project.count))") { store.stop(project) }
+            }
         }
     }
 }
@@ -527,6 +659,7 @@ struct PortLookupView: View {
     let port: UInt16
     let result: PortLookup
     var hovered: String? = nil
+    var selected: String? = nil
     @EnvironmentObject private var store: PortStore
 
     var body: some View {
@@ -569,12 +702,12 @@ struct PortLookupView: View {
                     Text("Port \(String(port)) is taken").font(Typo.metric)
                 }
                 .padding(.horizontal, Space.xxs)
-                ServerSection(title: nil, servers: servers, hovered: hovered, highlightPort: port)
+                ServerSection(title: nil, servers: servers, hovered: hovered, selected: selected, highlightPort: port)
                 if !stoppable.isEmpty {
                     PrimaryPill(title: "Free port \(String(port))",
                                 detail: stoppable.count == 1 ? "stops \(stoppable[0].title)" : "stops \(stoppable.count) processes",
                                 icon: "stop.fill") {
-                        stoppable.forEach { store.stop($0) }
+                        store.stop(stoppable)
                     }
                 }
             }
