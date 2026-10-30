@@ -152,33 +152,44 @@ enum Scanner {
     }
 
     /// Whether anything at all holds the port, including processes Portside can't see
-    /// (other users, root): try to bind it ourselves.
+    /// (other users, root): try to bind it ourselves on the any and loopback addresses.
+    /// SO_REUSEADDR lets the bind ignore closed connections lingering in TIME_WAIT, which
+    /// aren't listeners, while a real listener on the same address still refuses it.
     static func portInUse(_ port: UInt16) -> Bool {
-        for family in [AF_INET, AF_INET6] {
-            let fd = socket(family, SOCK_STREAM, 0)
-            guard fd >= 0 else { continue }
-            defer { close(fd) }
-            let result: Int32
-            if family == AF_INET {
-                var addr = sockaddr_in()
-                addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-                addr.sin_family = sa_family_t(AF_INET)
-                addr.sin_port = port.bigEndian
-                result = withUnsafePointer(to: &addr) {
-                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-                }
-            } else {
-                var addr = sockaddr_in6()
-                addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
-                addr.sin6_family = sa_family_t(AF_INET6)
-                addr.sin6_port = port.bigEndian
-                result = withUnsafePointer(to: &addr) {
-                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) }
-                }
-            }
-            if result != 0 && errno == EADDRINUSE { return true }
+        func v4(_ ip: UInt32) -> sockaddr_in {
+            var a = sockaddr_in()
+            a.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            a.sin_family = sa_family_t(AF_INET)
+            a.sin_port = port.bigEndian
+            a.sin_addr.s_addr = ip.bigEndian
+            return a
         }
-        return false
+        func v6(_ ip: in6_addr) -> sockaddr_in6 {
+            var a = sockaddr_in6()
+            a.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+            a.sin6_family = sa_family_t(AF_INET6)
+            a.sin6_port = port.bigEndian
+            a.sin6_addr = ip
+            return a
+        }
+        var any4 = v4(INADDR_ANY), loop4 = v4(INADDR_LOOPBACK)
+        var any6 = v6(in6addr_any), loop6 = v6(in6addr_loopback)
+        return [tryBind(&any4, AF_INET), tryBind(&loop4, AF_INET), tryBind(&any6, AF_INET6), tryBind(&loop6, AF_INET6)]
+            .contains(EADDRINUSE)
+    }
+
+    /// Binds a throwaway socket to the address; returns errno on failure, 0 on success.
+    private static func tryBind<T>(_ addr: inout T, _ family: Int32) -> Int32 {
+        let fd = socket(family, SOCK_STREAM, 0)
+        guard fd >= 0 else { return errno }
+        defer { close(fd) }
+        var yes: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        if family == AF_INET6 { setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &yes, socklen_t(MemoryLayout<Int32>.size)) }
+        let result = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<T>.size)) }
+        }
+        return result == 0 ? 0 : errno
     }
 
     /// This Mac's address on the local network (Wi-Fi or Ethernet), for "open on your phone" URLs.

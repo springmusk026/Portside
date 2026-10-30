@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1 (2026-10-30)
+
+- Fix: right after you stopped a server, looking up its port could say "taken by a process Portside can't see".
+  Closed connections lingering in TIME_WAIT no longer count as a listener.
+
 ## 1.0 (2026-10-30)
 
 First release.
